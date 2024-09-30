@@ -265,7 +265,7 @@ def main(venu,HAND_num=3,process=3):
             # po.apply_async(func=new_discretize.Divde_Lake_HillSlope, args=(venu,para[0], para[1], para[10], para[11],para[3],))
             # a=po.apply_async(Divde_HillSlope, (venu,para[0], para[1], para[10], para[11],para[3],))
             # Divde_HillSlope(venu, para[0], para[1], para[10], para[11], para[3])
-            new_discretize.Divde_Lake_HillSlope(venu, para[0], para[5], para[10], para[11],para[3],thresold1=123,thresold2=123)
+            new_discretize.divde_stream_basin(venu, para[0], para[5], para[10], para[11],para[3],thresold1=123,thresold2=123)
 
     # ****************************** F3、土地利用和高程叠加 ************************************
     # for para in para_list:

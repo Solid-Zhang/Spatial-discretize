@@ -6,10 +6,13 @@ from osgeo import gdal,ogr
 import Raster
 import util_ZB
 import jenkspy
+import whitebox_workflows
+import whitebox
 dmove=[(0,1),(1,1),(1,0),(1,-1),(0,-1),(-1,-1),(-1,0),(-1,1)]
 dmove_dic = {1: (0, 1), 2: (1, 1), 4: (1, 0), 8: (1, -1), 16: (0, -1), 32: (-1, -1), 64: (-1, 0), 128: (-1, 1)}
 
-def Divde_Lake_HillSlope(venu,Dir_file,Stream_file,LU_file,Slope_file,HAND_file,thresold1=123,thresold2=123):
+wbt = whitebox.WhiteboxTools()
+def divde_stream_basin(venu,Dir_file,Stream_file,LU_file,Slope_file,HAND_file,thresold1=123,thresold2=123):
 
     # 输出到
     # venu=r'E:\青藏高原东部河流输出碳\DATA\SubBasin_singleSHP\Test_Basin2'
@@ -894,6 +897,369 @@ def Divide_By_HRU(venu,Lu_file,DEM_file,Basin_id,Soil_file=None,Area_thresold=10
                             HLU[cell[0],cell[1]]=new_id
         Raster.save_raster(out_file,HLU,proj,geo,gdal.GDT_Float32,-9999)
 
+def search_lake_flow(dir,lake,stream,acc,l_nodata,s_nodata):
+    # 1、Search the flow path
+    row, col = dir.shape
+    stream1 = stream.copy()
+
+    lakes = {}
+    for i in range(row):
+        for j in range(col):
+            if lake[i, j] != l_nodata:
+                lakes.setdefault(lake[i, j], []).append((i, j, acc[i, j]))
+    # print(lakes)
+    for lakeId in lakes:
+        lakeCells = lakes[lakeId]
+        lakeCells.sort(key=lambda x: x[2], reverse=True)
+        maxAccCell = lakeCells[0]
+        if stream[maxAccCell[0], maxAccCell[1]] == s_nodata:
+            print(lakeId)
+            # 从该点寻找下游直到遇到湖泊或河道
+            cells = [(maxAccCell[0], maxAccCell[1])]
+            flowPathCells = []
+            while cells:
+                cell = cells.pop()
+                flowPathCells.append(cell)
+                nowDir = dir[cell[0], cell[1]]
+                nextCell = (cell[0] + dmove_dic[nowDir][0], cell[1] + dmove_dic[nowDir][1])
+                if not util_ZB.Check_extent(row, col, nextCell[0], nextCell[1]):
+                    break
+                if stream[nextCell[0], nextCell[1]] == s_nodata and lake[nextCell[0], nextCell[1]] == l_nodata:
+                    cells.append(nextCell)
+                else:
+                    if stream[nextCell[0], nextCell[1]] != s_nodata:
+                        streamId = stream[nextCell[0], nextCell[1]]
+                    else:
+                        streamId = stream1[stream1 != s_nodata].max() + 1
+            for cell in flowPathCells:
+                stream1[cell[0], cell[1]] = streamId
+    return stream1
+
+def delineation_lake_stream(dir,lake,stream,dem,s_nodata,l_nodata):
+    row, col = dir.shape
+
+    lakes = {}
+    riverChannels = {}
+    for i in range(row):
+        for j in range(col):
+            if lake[i, j] != l_nodata:
+                lakes.setdefault(lake[i, j], []).append((i, j))
+            elif stream[i, j] != s_nodata:
+                riverChannels.setdefault(stream[i, j], []).append((i, j))
+
+    watershed = np.zeros((row, col))
+    watershed[:, :] = -9999
+    hand = np.zeros((row, col))
+    hand[:, :] = -9999
+    hydroloyType = {1:[],2:[],3:[]}  # 记录提出的流域属性： 1: stream_basin ; 2: lakes ; 3: hillslope
+    # 追溯河流上游
+    for riverId in riverChannels:
+        rivers = riverChannels[riverId]
+        hydroloyType[1].append(riverId)
+        while rivers:
+            pop_cell = rivers.pop()
+            # 计算hand
+            if stream[pop_cell[0],pop_cell[1]] != s_nodata:
+                hand[pop_cell[0],pop_cell[1]] = 0
+            watershed[pop_cell[0], pop_cell[1]] = riverId
+            upCells = util_ZB.get_rever_D8(dir, pop_cell[0], pop_cell[1])
+            for cell in upCells:
+                if stream[cell[0], cell[1]] == s_nodata and lake[cell[0], cell[1]] == l_nodata:
+                    rivers.append(cell)
+                    hand[cell[0],cell[1]] = dem[cell[0],cell[1]] - dem[pop_cell[0],pop_cell[1]] + hand[pop_cell[0],pop_cell[1]]
+    # Raster.save_raster(r'F:\空间离散化\代码示例\example\watershed1.tif', watershed, proj, geo, gdal.GDT_Float32, -9999)  # 只有河道流域
+    # 追溯湖泊坡面
+    watershedId = stream[stream != s_nodata].max() + 1
+    for riverId in lakes:
+        lakeCells = lakes[riverId].copy()
+
+        while lakeCells:
+            pop_cell = lakeCells.pop()
+            if lake[pop_cell[0], pop_cell[1]] != l_nodata:
+                hand[pop_cell[0], pop_cell[1]] = 0
+            watershed[pop_cell[0], pop_cell[1]] = watershedId
+            upCells = util_ZB.get_rever_D8(dir, pop_cell[0], pop_cell[1])
+            for cell in upCells:
+                if stream[cell[0], cell[1]] == s_nodata and lake[cell[0], cell[1]] == l_nodata:
+                    lakeCells.append(cell)
+                    hand[cell[0], cell[1]] = dem[cell[0],cell[1]] - dem[pop_cell[0],pop_cell[1]] + hand[pop_cell[0],pop_cell[1]]
+        hydroloyType[3].append(watershedId)
+        watershedId += 1
+        for cell in lakes[riverId]:
+
+            watershed[cell[0],cell[1]] = watershedId
+        hydroloyType[2].append(watershedId)
+        watershedId += 1
+    # Raster.save_raster(r'F:\空间离散化\代码示例\example\watershed2.tif', watershed, proj, geo, gdal.GDT_Float32,-9999)  # 结果
+
+    return watershed,hand,hydroloyType
+def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file,HAND_file):
+
+    lake = Raster.get_raster(lake_file)
+    dir = Raster.get_raster(dir_file)
+    stream = Raster.get_raster(stream_file)
+    dem = Raster.get_raster(dem_file)
+    acc = Raster.get_raster(acc_file)
+    proj, geo, s_nodata = Raster.get_proj_geo_nodata(stream_file)
+    proj, geo, l_nodata = Raster.get_proj_geo_nodata(lake_file)
+    proj, geo, d_nodata = Raster.get_proj_geo_nodata(dir_file)
+    print(geo)
+    row, col = dir.shape
+
+    # 1、Search the flow path
+    stream1 = search_lake_flow(dir,lake,stream,acc,l_nodata,s_nodata)
+    # Raster.save_raster(r'F:\空间离散化\代码示例\example\stream_modified1.tif', stream1, proj, geo, gdal.GDT_Byte,0)
+
+    # 2、Delineation the subbasin and hillslopes
+    watershed_path = os.path.join(os.path.dirname(dir_file),'watershed')
+    if not os.path.exists(watershed_path):
+        os.mkdir(watershed_path)
+    watershed_file = os.path.join(watershed_path,'watershed.tif')
+    hand_file =  os.path.join(os.path.dirname(dir_file),'hand.tif')
+    watershed,hand ,hydrologyType = delineation_lake_stream(dir,lake,stream1,dem,s_nodata,l_nodata)
+    # Raster.save_raster(watershed_file, watershed, proj, geo, gdal.GDT_Float32,-9999)  # 结果
+    # Raster.save_raster(hand_file, hand, proj, geo, gdal.GDT_Float32, -9999)  # 结果
+
+    # 3、Raster2Vector Basin
+    # print(hydrologyType)
+    # watershed_shp_file = os.path.join(watershed_path,'watershed.shp')
+    # wbt.raster_to_vector_polygons(watershed_file,watershed_shp_file)
+
+    # 4、discretize
+    hillPath = os.path.join(os.path.dirname(dir_file),'Lake Hillsope')
+    if not os.path.exists(hillPath):
+        os.mkdir(hillPath)
+    for lakeId in hydrologyType[2]:
+        resultPath = os.path.join(hillPath,str(lakeId))
+        if not os.path.exists(resultPath):
+            os.mkdir(resultPath)
+        x = []
+        y = []
+        lakeBoundary = np.where(watershed == lakeId)
+        hillslopeBoundary = np.where(watershed == lakeId-1)
+        x += list(lakeBoundary[0])
+        x += list(hillslopeBoundary[0])
+        y += list(lakeBoundary[1])
+        y += list(hillslopeBoundary[1])
+
+        maskExtent = [min(x),max(x),min(y),max(y)]
+
+        maskHill = watershed[maskExtent[0]:maskExtent[1],maskExtent[2]:maskExtent[3]].copy()
+        maskLake = watershed[maskExtent[0]:maskExtent[1], maskExtent[2]:maskExtent[3]].copy()
+        maskDir = dir[maskExtent[0]:maskExtent[1], maskExtent[2]:maskExtent[3]].copy()
+        maskHand = hand[maskExtent[0]:maskExtent[1], maskExtent[2]:maskExtent[3]].copy()
+        maskHill[maskHill != lakeId-1] = -9999
+        maskLake[maskLake != lakeId] = -9999
+        maskHand[maskHill == -9999] = -9999
+
+        maskrow,maskcol = maskHand.shape
+
+
+        # F2、面积控制
+        # maskVis = np.zeros((maskrow, maskcol))
+        # maskVis[maskHill == -9999] = 1
+        # tempLakeCells = np.argwhere(maskLake != -9999)
+        # tempLakeBoundary = []
+        # for cell in tempLakeCells:
+        #     flag = False
+        #     for k in range(8):
+        #         nextCell = (cell[0]+dmove[k][0],cell[1]+dmove[k][1])
+        #         if not util_ZB.Check_extent(maskrow,maskcol,nextCell[0],nextCell[1]):
+        #             flage = True
+        #             break
+        #         if maskLake[nextCell[0],nextCell[1]] != lakeId:
+        #             flag = True
+        #             break
+        #     if flag:
+        #         tempLakeBoundary.append(cell)
+        #         maskVis[cell[0],cell[1]] = 0
+        #
+        #
+        # hillId = math.ceil(maskHand[maskHand != -9999].max())
+        # breakvalue = len(maskHand[maskHand != -9999])*0.25
+        # tempHand = maskHand.copy()
+        # while not np.all(maskVis == 1):
+        #
+        #     endCells = []
+        #     while tempLakeBoundary:
+        #         popCell = tempLakeBoundary.pop()
+        #
+        #         if len(endCells) > breakvalue:
+        #             hillId += 1
+        #             endCells = []
+        #
+        #         if maskVis[popCell[0],popCell[1]] == 1 :
+        #             continue
+        #         maskVis[popCell[0],popCell[1]] = 1
+        #         upCells = util_ZB.get_rever_D8(maskDir,popCell[0],popCell[1])
+        #         # print(upCells)
+        #         for cell in upCells:
+        #             if maskVis[cell[0],cell[1]] == 1:
+        #                 continue
+        #             endCells.insert(0,cell)
+        #             tempLakeBoundary.insert(0,cell)
+        #             tempHand[cell[0],cell[1]] = hillId
+        #
+        # # # 拆分合并
+        # print('Start spilt...')
+        # hillId += 1
+        # maskVis = np.zeros((maskrow, maskcol))
+        # maskVis[maskHill == -9999] = 1
+        # originNowId = {}
+        # newHRUId = maskHand.copy()
+        # newIDCells = {}   # 记录新id对应的栅格
+        # for i in range(maskrow):
+        #     for j in range(maskcol):
+        #         if tempHand[i,j] == -9999:
+        #             continue
+        #         if maskVis[i,j] == 1:
+        #             continue
+        #         maskVis,collectionCells = util_ZB.bfs(tempHand[i,j],i,j,tempHand,maskVis)
+        #         originNowId.setdefault(tempHand[i,j],[]).append([hillId])
+        #         newIDCells.setdefault(hillId,collectionCells)
+        #         for cell in collectionCells:
+        #             newHRUId[cell[0],cell[1]] = hillId
+        #         hillId += 1
+        # # temp_geo = (geo[0] + geo[1] * maskExtent[2], geo[1], geo[2], geo[3] + geo[5] * maskExtent[0], geo[4], geo[5])    # 查看中间变量
+        # # Raster.save_raster(os.path.join(hillPath,str(lakeId)+'.tif'),newHRUId,proj,temp_geo,gdal.GDT_Float32,-9999)
+        # # 将面积小的碎斑（小于100个）合并至下游,从原始id较小的开始合并
+        # print('Merging...')
+        # originNowIdArea = list(originNowId.keys())
+        # originNowIdArea.sort()
+        # for originId in originNowIdArea:
+        #     for info in originNowId[originId]:  # 最靠近湖泊的不合并，无下游可以合并
+        #         if len(newIDCells[info[0]]) < 100:
+        #             newId = -1
+        #             for cell in newIDCells[info[0]]:
+        #                 # 寻找下游不等于现在id的id
+        #                 popCells = [cell]
+        #                 flag = False
+        #                 while popCells:
+        #                     popCell = popCells.pop()
+        #                     if not util_ZB.Check_extent(maskrow,maskcol,popCell[0],popCell[1]):
+        #                         break
+        #                     nowDir = maskDir[popCell[0],popCell[1]]
+        #                     if not nowDir in dmove_dic:
+        #                         break
+        #                     nextCell = (popCell[0]+dmove_dic[nowDir][0],popCell[1]+dmove_dic[nowDir][1])
+        #                     if newHRUId[nextCell[0], nextCell[1]] == -9999:
+        #                         break
+        #                     if newHRUId[nextCell[0],nextCell[1]]!=info[0]:
+        #                         flag = True
+        #                         newId = newHRUId[nextCell]
+        #                         break
+        #                     popCells.append(nextCell)
+        #                 if flag:
+        #                     break
+        #             if newId == -1:
+        #                 continue
+        #             for cell in newIDCells[info[0]]:
+        #                 newHRUId[cell[0],cell[1]] = newId
+        #
+        #
+        #
+        # # 重新整理id和流向并记录
+        # newId = 1
+        # for cellId in newIDCells:
+        #     cells = np.argwhere(newHRUId == cellId)
+        #     for cell in cells:
+        #         newHRUId[cell[0],cell[1]] = newId
+        #     newId += 1
+        # confluence = {}
+        #
+        # for cellId in range(1,newId):
+        #
+        #     cells = np.argwhere(newHRUId == cellId)
+        #     nextId = -1
+        #     for cell in cells:
+        #         popCells = [cell]
+        #         flag = False
+        #         while popCells:
+        #             popCell = popCells.pop()
+        #             if not util_ZB.Check_extent(maskrow, maskcol, popCell[0], popCell[1]):
+        #                 break
+        #             nowDir = maskDir[popCell[0], popCell[1]]
+        #             if not nowDir in dmove_dic:
+        #                 break
+        #             nextCell = (popCell[0] + dmove_dic[nowDir][0], popCell[1] + dmove_dic[nowDir][1])
+        #             if newHRUId[nextCell[0], nextCell[1]] == -9999:
+        #                 flag = True
+        #                 break
+        #             if newHRUId[nextCell[0], nextCell[1]] != cellId:
+        #                 flag = True
+        #                 nextId = newHRUId[nextCell]
+        #                 break
+        #             popCells.append(nextCell)
+        #         if flag:
+        #             break
+        #     confluence.setdefault(cellId,nextId)
+        #
+        #
+        # # 存储流向
+        # confluence_file = os.path.join(resultPath,'confluence_'+str(lakeId)+'.txt')
+        # confluenceStr = 'FID    downstreamFID    subbasin\n'
+        # for nowId in confluence:
+        #     confluenceStr += str(nowId)+'    '+str(confluence[nowId])+'    '+str(lakeId-1)+'\n'
+        # with open(confluence_file,'w') as f:
+        #     f.writelines(confluenceStr)
+        #     f.close()
+        # temp_geo = (geo[0] + geo[1] * maskExtent[2], geo[1], geo[2], geo[3] + geo[5] * maskExtent[0], geo[4], geo[5])
+        # Raster.save_raster(os.path.join(resultPath, str(lakeId) + '.tif'), newHRUId, proj, temp_geo, gdal.GDT_Float32,
+        #                    -9999)
+
+        # F3、基于子山坡的空间离散化
+        # 搜索湖泊边界
+        lakeExtent = []
+        for i in range(maskrow):
+            for j in range(maskcol):
+                flag = False
+                if maskLake[i,j] == -9999:
+                    continue
+                for k in range(8):
+                    nextCell = (i+dmove[k][0],j+dmove[k][1])
+                    if not util_ZB.Check_extent(maskrow,maskcol,nextCell[0],nextCell[1]):
+                        flag = True
+                        break
+                    if maskLake[nextCell[0],nextCell[1]] == -9999:
+                        flag = True
+                        break
+                if flag:
+                    lakeExtent.append((i,j))
+        originId = 1
+        originHill = np.zeros((maskrow,maskcol))
+        originHill[:,:] = -9999
+        for cell in lakeExtent:
+            popCells = [cell]
+            tempCells = []
+            while popCells:
+                popCell = popCells.pop()
+                upStreamCells = util_ZB.get_rever_D8(maskDir,popCell[0],popCell[1])
+                for upCell in upStreamCells:
+                    if maskLake[upCell[0],upCell[1]] != -9999:
+                        continue
+                    if maskHill[upCell[0],upCell[1]] == -9999:
+                        continue
+                    tempCells.append(upCell)
+                    popCells.append(upCell)
+
+            for tempCell in tempCells:
+                originHill[tempCell[0],tempCell[1]] = originId
+            originId += 1
+
+        # 合并碎斑成整体
+        # 拆分不连续单元
+        # 在子山坡内根据HAND离散化
+        # 合并小单元至下游
+
+        temp_geo = (geo[0]+geo[1]*maskExtent[2],geo[1],geo[2],geo[3]+geo[5]*maskExtent[0],geo[4],geo[5])
+        Raster.save_raster(os.path.join(resultPath,str(lakeId)+'.tif'),originHill,proj,temp_geo,gdal.GDT_Float32,-9999)
+
+
+
+
+
+
+
 def median_filter(image, kernel_size):
     # 获得图像的大小
     height, width = image.shape
@@ -1058,42 +1424,12 @@ def merge_patch(venu):
                        geo, gdal.GDT_Float32, -9999)
 
 if __name__=='__main__':
-
-    # *******************TestBasin模拟***********************
-    # venu = r'E:\空间离散化\小流域测试\XJS'
-    # Stream_file=r'E:\空间离散化\小流域测试\XJS\Stream1.tif'
-    # Dir_file=r'E:\空间离散化\小流域测试\XJS\Dir_1.tif'
-    # # out_file=r'E:\青藏高原东部河流输出碳\DATA\SubBasin_singleSHP\Test_Basin2\new_discretize3.tif'
-    # # LU_file=r'E:\青藏高原东部河流输出碳\DATA\SubBasin_singleSHP\Test_Basin2\LU.tif'
-    # # Slope_file=r'E:\青藏高原东部河流输出碳\DATA\SubBasin_singleSHP\Test_Basin2\Slope.tif'
-    # # HAND_file=r'E:\青藏高原东部河流输出碳\DATA\SubBasin_singleSHP\Test_Basin2\HillSlope\HillSlope\412100127606\HAND412100127606.tif'
-    # Divde_Lake_HillSlope(venu,Dir_file,Stream_file,LU_file,Slope_file,HAND_file)
-    # # merge_HRU(venu)
-    # # merge_patch(venu)
-    #
-    # # ****************葫芦沟20240203合并*********************
-    # venu = r'E:\青藏高原东部河流输出碳\DATA\SubBasin_singleSHP\HLU20240203'
-    # merge_HRU(venu)
-    # # merge_patch(venu)
-
-
-    # *********** Stteper 代码测试 *************
-
-    LU = r'E:\空间离散化\小流域测试\Stteper\landuse.tif'
-    DEM = r'E:\空间离散化\小流域测试\Stteper\basin_elv.tif'
-    Soil = r''
-    out_file = r'E:\空间离散化\小流域测试\Stteper\Stteper_LU_DEM_HRU.tif'
-    #
-    Divide_By_HRU(LU, DEM, out_file)
-
-
-    # ************ 葫芦沟HRU划分数据_0227 空间离散化测试 **************
-
-    LU=r'E:\青藏高原东部河流输出碳\DATA\SubBasin_singleSHP\HRU划分数据_0227\landuse.tif'
-    DEM=r'E:\青藏高原东部河流输出碳\DATA\SubBasin_singleSHP\HRU划分数据_0227\HRU划分数据\dem.tif'
-    Soil=r''
-    out_file=r'E:\青藏高原东部河流输出碳\DATA\SubBasin_singleSHP\HRU划分数据_0227\LU_DEM_HRU_6.tif'
-
-    # Divide_By_HRU(LU,DEM,out_file)
+    dem_file = r'F:\空间离散化\代码示例\example\DEM.tif'
+    dir_file = r'F:\空间离散化\代码示例\example\Dir.tif'
+    lake_file = r'F:\空间离散化\代码示例\example\lakes.tif'
+    stream_file = r'F:\空间离散化\代码示例\example\Stream100_link.tif'
+    acc_file = r'F:\空间离散化\代码示例\example\Acc.tif'
+    HAND_file = r'F:\空间离散化\代码示例\example'
+    divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file,HAND_file)
 
     pass
