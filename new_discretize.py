@@ -1426,11 +1426,6 @@ def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file,HAND_
         f.close()
 
 
-
-
-
-
-
 def merge_HLU(venu):
     """
     针对小流域的合并，Clip.customline=False时使用
