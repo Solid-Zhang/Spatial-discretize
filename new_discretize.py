@@ -1416,6 +1416,7 @@ def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file,HAND_
         with open(confluence_file,'w') as f:
             f.writelines(confluenceStr)
             f.close()
+        newHRUId[maskLake!=-9999] = newId
         temp_geo = (geo[0] + geo[1] * maskExtent[2], geo[1], geo[2], geo[3] + geo[5] * maskExtent[0], geo[4], geo[5])
         Raster.save_raster(os.path.join(resultPath, str(lakeId) + '.tif'), newHRUId, proj, temp_geo, gdal.GDT_Float32,
                            -9999)
@@ -1563,6 +1564,11 @@ def merge_patch(venu):
                        geo, gdal.GDT_Float32, -9999)
 
 def merge_lake_HRU(venu):
+    """
+    湖泊坡面离散化后的文件合并
+    :param venu:
+    :return:
+    """
     lake_HRU_path = os.path.join(venu,'Lake Hillslope')
     lake_path = os.listdir(lake_HRU_path)
     lake_path = [os.path.join(lake_HRU_path,str(lake),str(lake)+'.tif') for lake in lake_path]
@@ -1571,6 +1577,7 @@ def merge_lake_HRU(venu):
     row,col = mask.shape
     mask = np.zeros((row,col))
     mask[:,:] = -9999
+
     proj,geo,nodata = Raster.get_proj_geo_nodata(maskFile)
 
     # 读取四至表
@@ -1616,7 +1623,7 @@ def merge_lake_HRU(venu):
 
         # 记录更新后的汇流关系
         for oldId in oldConfluence:
-            newConfluence+=str(confluenceLookup[oldId]) + '    ' + str(confluenceLookup[oldConfluence[oldId][0]]) + '    ' + str(confluenceLookup[oldConfluence[oldId][1]]) + '\n'
+            newConfluence+=str(confluenceLookup[oldId]) + '    ' + str(confluenceLookup[oldConfluence[oldId][0]]) + '    ' + str(oldConfluence[oldId][1]) + '\n'
     Raster.save_raster(os.path.join(venu,'HRU.tif'),mask,proj,geo,gdal.GDT_Float32,-9999)
 
     with open(os.path.join(venu,'confluence.txt'),'w') as f:
