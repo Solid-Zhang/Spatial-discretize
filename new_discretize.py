@@ -1326,10 +1326,10 @@ def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file,HAND_
         #                    -9999)
 
         # 合并小单元至下游，小于面积阈值的集合被逐栅格合并至面积合适的下游
+        mergeToUpCells = []
         for tempId in idArea:
             if len(idArea[tempId]) >= 90:
                 continue
-
             for cell in idArea[tempId]:
                 mergeId = -1
                 popCells = [cell]
@@ -1337,15 +1337,15 @@ def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file,HAND_
                 while popCells:
                     popCell = popCells.pop()
                     if not util_ZB.Check_extent(maskrow, maskcol, popCell[0], popCell[1]):
-                        case = 1 # 合并至最近的面积合适的上游
+                        case = 1 #
                         break
                     nowDir = maskDir[popCell[0], popCell[1]]
                     if not nowDir in dmove_dic:
-                        case = 1  # 合并至最近的面积合适的上游
+                        case = 1  #
                         break
                     nextCell = (popCell[0] + dmove_dic[nowDir][0], popCell[1] + dmove_dic[nowDir][1])
                     if newHRUId[nextCell[0], nextCell[1]] == -9999:
-                        case = 1 # 合并至最近的面积合适的上游
+                        case = 2 # 合并至最近的面积合适的上游
                         break
                     if newHRUId[nextCell[0], nextCell[1]] == tempId:
                         popCells.append(nextCell)
@@ -1355,10 +1355,51 @@ def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file,HAND_
                         continue
                     mergeId = newHRUId[nextCell[0],nextCell[1]]
                     break
-
+                if case == 2:
+                    # 合并至最近的面积合适的上游
+                    mergeToUpCells.append(cell)
                 if mergeId == -1:
                     continue
                 newHRUId[cell[0],cell[1]] = mergeId
+        # # 追溯不到下游就找上游
+        # for cell in mergeToUpCells:
+        #     mergeId = -1
+        #     popCells = [cell]
+        #     while popCells:
+        #         popCell = popCells.pop()
+        #         if not util_ZB.Check_extent(maskrow, maskcol, popCell[0], popCell[1]):
+        #             case = 1  #
+        #             break
+        #         nowDir = maskDir[popCell[0], popCell[1]]
+        #         if not nowDir in dmove_dic:
+        #             case = 1  #
+        #             break
+        #         nextCell = (popCell[0] + dmove_dic[nowDir][0], popCell[1] + dmove_dic[nowDir][1])
+        #         if newHRUId[nextCell[0], nextCell[1]] == -9999:
+        #             case = 2  # 合并至最近的面积合适的上游
+        #             break
+        #         if newHRUId[nextCell[0], nextCell[1]] == newHRUId[cell[0], cell[1]]:
+        #             popCells.append(nextCell)
+        #             continue
+        #         if len(idArea[newHRUId[nextCell[0], nextCell[1]]]) < 90:
+        #             popCells.append(nextCell)
+        #             continue
+        #         mergeId = newHRUId[nextCell[0], nextCell[1]]
+        #     if mergeId == -1:
+        #         # 合并至相邻
+        #         for k in range(8):
+        #             nextCell = (cell[0]+dmove[k][0],cell[1]+dmove[k][1])
+        #             if not util_ZB.Check_extent(maskrow,maskcol,nextCell[0],nextCell[1]):
+        #                 continue
+        #             if newHRUId[nextCell[0],nextCell[1]] == -9999:
+        #                 continue
+        #             if newHRUId[nextCell[0],nextCell[1]] == newHRUId[cell[0],cell[1]]:
+        #                 continue
+        #             mergeId = newHRUId[nextCell[0],nextCell[1]]
+        #     if mergeId == -1:
+        #         continue
+        #     newHRUId[cell[0], cell[1]] = mergeId
+
 
         # temp_geo = (geo[0] + geo[1] * maskExtent[2], geo[1], geo[2], geo[3] + geo[5] * maskExtent[0], geo[4], geo[5])
         # Raster.save_raster(os.path.join(resultPath, str(lakeId) + '.tif'), newHRUId, proj, temp_geo,
