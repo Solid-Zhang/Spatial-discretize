@@ -992,9 +992,41 @@ def delineation_lake_stream(dir,lake,stream,dem,s_nodata,l_nodata):
         hydroloyType[2].append(watershedId)
         watershedId += 1
     # Raster.save_raster(r'F:\空间离散化\代码示例\example\watershed2.tif', watershed, proj, geo, gdal.GDT_Float32,-9999)  # 结果
+    # 记录流域坡面之间的流向
+    s = 'subbasin    downstreamSubbasinId    type\n'
+    for type1 in hydroloyType:
+        watershedIds = hydroloyType[type1]
+        for wId in watershedIds:
+            cells = np.argwhere(watershed == wId)
+            if len(cells) == 0:
+                continue
 
-    return watershed,hand,hydroloyType
-def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file,HAND_file):
+            popCells = [cells[0]]
+            downstreamId = -1
+            while popCells:
+                popCell = popCells.pop()
+
+                nowDir = dir[popCell[0], popCell[1]]
+                if not nowDir in dmove_dic:
+                    case = 1  #
+                    break
+                nextCell = (popCell[0] + dmove_dic[nowDir][0], popCell[1] + dmove_dic[nowDir][1])
+                if not util_ZB.Check_extent(row, col, nextCell[0], nextCell[1]):
+                    case = 1  #
+                    break
+                if watershed[nextCell[0], nextCell[1]] == watershed[popCell[0],popCell[1]]:
+                    popCells.append(nextCell)
+                    continue
+                downstreamId = watershed[nextCell[0], nextCell[1]]
+                break
+
+            s += str(wId)+'    '+str(downstreamId)+'    '+str(type1) + '\n'
+
+
+
+
+    return watershed,hand,hydroloyType,s
+def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file):
 
 
 
@@ -1007,6 +1039,7 @@ def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file,HAND_
     proj, geo, s_nodata = Raster.get_proj_geo_nodata(stream_file)
     proj, geo, l_nodata = Raster.get_proj_geo_nodata(lake_file)
     proj, geo, d_nodata = Raster.get_proj_geo_nodata(dir_file)
+    proj, geo, e_nodata = Raster.get_proj_geo_nodata(dem_file)
     # print(geo)
     row, col = dir.shape
     # 生成掩膜
@@ -1015,7 +1048,7 @@ def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file,HAND_
     Raster.save_raster(os.path.join(os.path.dirname(dir_file),'mask.tif'),mask,proj,geo,gdal.GDT_Byte,0)
     # 1、Search the flow path
     stream1 = search_lake_flow(dir,lake,stream,acc,l_nodata,s_nodata)
-    # Raster.save_raster(r'F:\空间离散化\代码示例\example\stream_modified1.tif', stream1, proj, geo, gdal.GDT_Byte,0)
+    Raster.save_raster(os.path.join(os.path.dirname(dir_file),'streamModified.tif'), stream1, proj, geo, gdal.GDT_Byte,0)
 
     # 2、Delineation the subbasin and hillslopes
     Mask_file = os.path.join(os.path.dirname(dir_file),'mask.csv')
@@ -1024,10 +1057,13 @@ def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file,HAND_
         os.mkdir(watershed_path)
     watershed_file = os.path.join(watershed_path,'watershed.tif')
     hand_file =  os.path.join(os.path.dirname(dir_file),'hand.tif')
-    watershed,hand ,hydrologyType = delineation_lake_stream(dir,lake,stream1,dem,s_nodata,l_nodata)
-    # Raster.save_raster(watershed_file, watershed, proj, geo, gdal.GDT_Float32,-9999)  # 结果
-    # Raster.save_raster(hand_file, hand, proj, geo, gdal.GDT_Float32, -9999)  # 结果
-
+    watershed,hand ,hydrologyType,subbasinConfluence = delineation_lake_stream(dir,lake,stream1,dem,s_nodata,l_nodata)
+    Raster.save_raster(watershed_file, watershed, proj, geo, gdal.GDT_Float32,-9999)  # 结果
+    Raster.save_raster(hand_file, hand, proj, geo, gdal.GDT_Float32, -9999)  # 结果
+    subbasinCofluenceFile = os.path.join(os.path.dirname(dir_file),'subbasinConfluence.txt')
+    with open(subbasinCofluenceFile,'w') as f:
+        f.writelines(subbasinConfluence)
+        f.close()
     # 3、记录四至
     extent = []
 
@@ -1467,6 +1503,56 @@ def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file,HAND_
         writer.writerows(extent)
         f.close()
 
+    # 河流子流域离散化
+    riverPath = os.path.join(os.path.dirname(dir_file),'HillSlope')
+    if not os.path.exists(riverPath):
+        os.mkdir(riverPath)
+    demPath = os.path.join(riverPath,'DEM')
+    if not os.path.exists(demPath):
+        os.mkdir(demPath)
+    dirPath = os.path.join(riverPath,'Dir')
+    if not os.path.exists(dirPath):
+        os.mkdir(dirPath)
+    streamPath = os.path.join(riverPath,'Stream')
+    if not os.path.exists(streamPath):
+        os.mkdir(streamPath)
+    maskPath = os.path.join(os.path.dirname(dir_file),'1')
+    if not os.path.exists(maskPath):
+        os.mkdir(maskPath)
+
+    for riverId in hydrologyType[1]:
+        x = []
+        y = []
+        lakeBoundary = np.where(watershed == riverId)
+
+        x += list(lakeBoundary[0])
+        y += list(lakeBoundary[1])
+
+        maskExtent = [min(x), max(x), min(y), max(y)]
+        extent.append([riverId] + maskExtent)
+        maskwatershed = watershed[maskExtent[0]:maskExtent[1], maskExtent[2]:maskExtent[3]].copy()
+        maskwatershed[maskwatershed != riverId] = -9999
+        maskDir = dir[maskExtent[0]:maskExtent[1], maskExtent[2]:maskExtent[3]].copy()
+        maskDir[maskwatershed == -9999] = d_nodata
+        maskHand = hand[maskExtent[0]:maskExtent[1], maskExtent[2]:maskExtent[3]].copy()
+        maskriver = stream1[maskExtent[0]:maskExtent[1], maskExtent[2]:maskExtent[3]].copy()
+        maskriver[maskwatershed == -9999] = s_nodata
+        maskDem = dem[maskExtent[0]:maskExtent[1], maskExtent[2]:maskExtent[3]].copy()
+        maskDem[maskwatershed == -9999] = e_nodata
+
+        maskrow, maskcol = maskHand.shape
+        temp_geo = (geo[0] + geo[1] * maskExtent[2], geo[1], geo[2], geo[3] + geo[5] * maskExtent[0], geo[4], geo[5])
+
+        Raster.save_raster(os.path.join(demPath,'DEM'+str(riverId)+'.tif'),maskDem,proj,temp_geo,gdal.GDT_Float32,e_nodata)
+        Raster.save_raster(os.path.join(dirPath, 'Dir_' + str(riverId) + '.tif'), maskDir, proj, temp_geo, gdal.GDT_Float32,d_nodata)
+        Raster.save_raster(os.path.join(streamPath, 'Stream' + str(riverId) + '.tif'), maskriver, proj, temp_geo,gdal.GDT_Float32, s_nodata)
+        maskfile = os.path.join(maskPath, str(riverId) + '.tif')
+        Raster.save_raster(maskfile,maskwatershed, proj, temp_geo,gdal.GDT_Float32, -9999)
+        wbt.raster_to_vector_polygons(maskfile,os.path.join(maskPath, str(riverId) + '.shp'))
+        os.remove(maskfile)
+
+
+
 
 def merge_HLU(venu):
     """
@@ -1680,6 +1766,6 @@ if __name__=='__main__':
     stream_file = r'F:\空间离散化\代码示例\example\Stream100_link.tif'
     acc_file = r'F:\空间离散化\代码示例\example\Acc.tif'
     HAND_file = r'F:\空间离散化\代码示例\example'
-    divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file,HAND_file)
+    divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file)
     merge_lake_HRU(r'F:\空间离散化\代码示例\example')
     pass
