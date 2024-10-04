@@ -41,7 +41,8 @@ if __name__ == '__main__':
     acc_file = r'F:\空间离散化\代码示例\example1\Acc.tif'
     HAND_file = r'F:\空间离散化\代码示例\example'
     Basin_path = r'F:\空间离散化\代码示例\example1\1'  # 子流域shp
-    new_discretize.divide_lake_hillslope(dem_file, dir_file, lake_file, stream_file, acc_file)
+    # new_discretize.divide_lake_hillslope(dem_file, dir_file, lake_file, stream_file, acc_file)
     # util_ZB.Check_self_intersect(Basin_path)
     # ZB_hillslope_workflow.Clip_DEM_Dir_Stream_sd_hillslope(Basin_path, dir_file, stream_file, dem_file, r'', venu)
     # calc_hand.main(venu, 6, process=3)
+    new_discretize.merge_lake_HRU(venu)

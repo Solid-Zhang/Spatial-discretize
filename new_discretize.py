@@ -1486,22 +1486,23 @@ def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file):
 
 
         # 存储流向
+
         confluence_file = os.path.join(resultPath,'confluence_'+str(lakeId)+'.txt')
         confluenceStr = 'FID    downstreamFID    subbasin\n'
+        # 给湖泊加id，流向0，与子流域汇流表同时使用
+        newHRUId[maskLake != -9999] = newId
+        confluenceStr += str(newId) + '    ' + '0' + '    ' + str(lakeId) + '\n'
         for nowId in confluence:
             confluenceStr += str(nowId)+'    '+str(confluence[nowId])+'    '+str(lakeId-1)+'\n'
         with open(confluence_file,'w') as f:
             f.writelines(confluenceStr)
             f.close()
-        newHRUId[maskLake!=-9999] = newId
+
         temp_geo = (geo[0] + geo[1] * maskExtent[2], geo[1], geo[2], geo[3] + geo[5] * maskExtent[0], geo[4], geo[5])
         Raster.save_raster(os.path.join(resultPath, str(lakeId) + '.tif'), newHRUId, proj, temp_geo, gdal.GDT_Float32,
                            -9999)
 
-    with open(Mask_file,'w',newline="") as f:
-        writer = csv.writer(f)
-        writer.writerows(extent)
-        f.close()
+
 
     # 河流子流域离散化
     riverPath = os.path.join(os.path.dirname(dir_file),'HillSlope')
@@ -1529,6 +1530,7 @@ def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file):
         y += list(lakeBoundary[1])
 
         maskExtent = [min(x), max(x), min(y), max(y)]
+
         extent.append([riverId] + maskExtent)
         maskwatershed = watershed[maskExtent[0]:maskExtent[1], maskExtent[2]:maskExtent[3]].copy()
         maskwatershed[maskwatershed != riverId] = -9999
@@ -1551,7 +1553,10 @@ def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file):
         wbt.raster_to_vector_polygons(maskfile,os.path.join(maskPath, str(riverId) + '.shp'))
         os.remove(maskfile)
 
-
+    with open(Mask_file,'w',newline="") as f:
+        writer = csv.writer(f)
+        writer.writerows(extent)
+        f.close()
 
 
 def merge_HLU(venu):
@@ -1699,6 +1704,11 @@ def merge_lake_HRU(venu):
     lake_HRU_path = os.path.join(venu,'Lake Hillslope')
     lake_path = os.listdir(lake_HRU_path)
     lake_path = [os.path.join(lake_HRU_path,str(lake),str(lake)+'.tif') for lake in lake_path]
+
+    river_HRU_path = os.path.join(venu, 'HRU')
+    river_path = os.listdir(river_HRU_path)
+    river_path = [os.path.join(river_HRU_path, str(lake), 'HRU' + str(lake) + '.tif') for lake in river_path]
+
     maskFile = os.path.join(venu,'mask.tif')
     mask = Raster.get_raster(maskFile)
     row,col = mask.shape
@@ -1718,13 +1728,14 @@ def merge_lake_HRU(venu):
 
     id = 1
     newConfluence = 'FID    downstreamFID    subbasin\n'
+
     for lake_HRU_file in lake_path:
 
         lake_HRU = Raster.get_raster(lake_HRU_file)
         lakeId = float(os.path.basename(lake_HRU_file).split('.')[0])
         n = 0
         oldConfluence = {}
-        confluenceLookup = {-1:-1}
+        confluenceLookup = {-1: -1}
         with open(os.path.join(os.path.dirname(lake_HRU_file),'confluence_'+str(int(lakeId))+'.txt'),'r') as f:
             con = f.readlines()
             for info in con:
@@ -1747,12 +1758,51 @@ def merge_lake_HRU(venu):
                 mask[i,j] = id
             confluenceLookup.setdefault(oldId,id)
             id += 1
+        # 记录更新后的汇流关系
+        for oldId in oldConfluence:
+            print(oldConfluence[oldId],confluenceLookup[oldId])
 
+            if oldConfluence[oldId][0] == 0:
+                newConfluence += str(confluenceLookup[oldId]) + '    ' + str(0) + '    ' + str(oldConfluence[oldId][1]) + '\n'
+                continue
+            newConfluence += str(confluenceLookup[oldId]) + '    ' + str(
+                confluenceLookup[oldConfluence[oldId][0]]) + '    ' + str(oldConfluence[oldId][1]) + '\n'
+
+    for river_HRU_file in river_path:
+
+        river_HRU = Raster.get_raster(river_HRU_file)
+        riverId = float(os.path.basename(river_HRU_file).split('.')[0][3:])
+        n = 0
+        oldConfluence = {}
+        confluenceLookup = {-1: -1}
+        with open(os.path.join(os.path.dirname(river_HRU_file), 'fields_' + str(int(riverId)) + '_0.txt'),
+                  'r') as f:
+            con = f.readlines()
+            for info in con:
+                if n > 0:
+                    ABC = info.split('    ')
+                    oldConfluence.setdefault(float(ABC[0]), [float(ABC[1]), float(ABC[2])])
+                n += 1
+        # 重构id
+        startRow = maskExtent[riverId][0]
+        startCol = maskExtent[riverId][2]
+        oldIds = list(np.unique(river_HRU))
+        # oldIds.remove(-9999)
+        for oldId in oldIds:
+            if oldId == -9999:
+                continue
+            cells = np.argwhere(river_HRU == oldId)
+            for cell in cells:
+                i = int(startRow + cell[0])
+                j = int(startCol + cell[1])
+                mask[i, j] = id
+            confluenceLookup.setdefault(oldId, id)
+            id += 1
         # 记录更新后的汇流关系
         for oldId in oldConfluence:
             newConfluence+=str(confluenceLookup[oldId]) + '    ' + str(confluenceLookup[oldConfluence[oldId][0]]) + '    ' + str(oldConfluence[oldId][1]) + '\n'
     Raster.save_raster(os.path.join(venu,'HRU.tif'),mask,proj,geo,gdal.GDT_Float32,-9999)
-
+    print(newConfluence)
     with open(os.path.join(venu,'confluence.txt'),'w') as f:
         f.writelines(newConfluence)
         f.close()

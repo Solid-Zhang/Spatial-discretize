@@ -59,6 +59,9 @@ def Clip(Basin_path,dir_file,stream_file,DEM_file,LU_file,Slope_file,Out_path):
             DEM_outname = os.path.join(Out_path, "DEM", "DEM" + clip[:-4] + ".tif")
             LU_outname = os.path.join(Out_path, "LU", "LU" + clip[:-4] + ".tif")
             Slope_outname = os.path.join(Out_path, "Slope", "Slope" + clip[:-4] + ".tif")
+
+            if os.path.exists(DEM_out_path):
+                continue
             # print(Dir_outname,Stream_outname)
             # os.path.join(Basin_path, clip)
 
