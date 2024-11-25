@@ -1029,7 +1029,6 @@ def delineation_lake_stream(dir,lake,stream,dem,s_nodata,l_nodata):
 def divide_lake_hillslope(dem_file,dir_file,lake_file,stream_file,acc_file):
 
 
-
     # 湖泊坡面空间离散化：基于子山坡的空间离散化
     lake = Raster.get_raster(lake_file)
     dir = Raster.get_raster(dir_file)
